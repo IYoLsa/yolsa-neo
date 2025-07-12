@@ -1,290 +1,238 @@
 --============================================================
---  Neo Soccer League • Modern Kick-Hitbox UI + Core Functionality
+--  Neo Soccer League • Exploit-Tarzı Sekmeli UI + Kick-Hitbox
+--  Tam LocalScript – 2025-07-12
+--============================================================
+--  Videodaki stil: koyu zemin, neon vurgu, sekmeli yan menü,
+--  sürüklenebilir başlık.              :contentReference[oaicite:0]{index=0}
 --============================================================
 
-local Players    = game:GetService("Players")
-local RunService = game:GetService("RunService")
-local CoreGui    = game:GetService("CoreGui")
-local lp         = Players.LocalPlayer
-
--- ▼ Default Settings
+--▼ Ayarlar ---------------------------------------------------
 local DEFAULT_RANGE      = 10.22
-local DEFAULT_RING_COLOR = Color3.fromRGB(0,128,255)
-local DEFAULT_IN_COLOR   = Color3.fromRGB(0,255,0)
-local DEFAULT_IN_TRANS   = 0.4
+local DEFAULT_RING_COLOR = Color3.fromRGB(0, 128, 255)
+local ACCENT_COLOR       = Color3.fromRGB(0, 170, 255)
 local SOUND_ID           = "rbxassetid://541909867"
 
-local SEGMENTS = 48
-local BAR_W    = 0.2
-local BAR_H    = 0.05
+local SEGMENTS           = 48
+local BAR_W, BAR_H       = 0.2, 0.05
+local BALL_MODEL, BALL_PART = "PLAIN_BALL", "HITBOX_BALL"
 
-local BALL_MODEL = "PLAIN_BALL"
-local BALL_PART  = "HITBOX_BALL"
+--▼ Servisler -------------------------------------------------
+local Players, RunService, TweenService, CoreGui =
+      game:GetService("Players"), game:GetService("RunService"),
+      game:GetService("TweenService"), game:GetService("CoreGui")
+local lp = Players.LocalPlayer
 
--- ▼ State
-local ringEnabled  = true
-local currentRange = DEFAULT_RANGE
-local ringColor    = DEFAULT_RING_COLOR
-local soundEnabled = true
+--▼ Durum -----------------------------------------------------
+local ringEnabled, currentRange, ringColor, soundEnabled =
+      true,        DEFAULT_RANGE, DEFAULT_RING_COLOR, true
 
 --============================================================
---  ▼ Utility Functions
+-- 1) UI Kurulumu (sekmeli) ----------------------------------
 --============================================================
-local function clearRing(hrp)
-	for _,c in ipairs(hrp:GetChildren()) do
-		if c.Name == "KickSeg" then c:Destroy() end
-	end
+local gui     = Instance.new("ScreenGui", lp:WaitForChild("PlayerGui"))
+gui.Name, gui.ResetOnSpawn, gui.ZIndexBehavior = "HitboxUI", false, Enum.ZIndexBehavior.Global
+
+--++ Ana Pencere ++++++++++++++++++++++++++++++
+local window  = Instance.new("Frame", gui)
+window.Size, window.Position = UDim2.fromOffset(420, 280), UDim2.fromOffset(60, 120)
+window.BackgroundColor3, window.BackgroundTransparency = Color3.fromRGB(25,25,25), 0.08
+window.BorderSizePixel = 0
+Instance.new("UICorner", window).CornerRadius = UDim.new(0, 8)
+-- gölge
+local shadow = Instance.new("ImageLabel", window)
+shadow.Size, shadow.Position = UDim2.new(1, 14, 1, 14), UDim2.fromOffset(-7,-7)
+shadow.Image, shadow.ImageTransparency, shadow.BackgroundTransparency =
+    "rbxassetid://1316045217", 0.7, 1
+shadow.ScaleType, shadow.SliceCenter, shadow.ZIndex = Enum.ScaleType.Slice, Rect.new(10,10,118,118), -1
+
+--++ Başlık Bar +++++++++++++++++++++++++++++++++
+local titleBar = Instance.new("Frame", window)
+titleBar.Size = UDim2.new(1,0,0,30)
+titleBar.BackgroundColor3 = Color3.fromRGB(20,20,20)
+Instance.new("UICorner", titleBar).CornerRadius = UDim.new(0,8)
+local tLabel = Instance.new("TextLabel", titleBar)
+tLabel.Size, tLabel.Position = UDim2.new(1,-60,1,0), UDim2.fromOffset(10,0)
+tLabel.BackgroundTransparency, tLabel.TextXAlignment = 1, Enum.TextXAlignment.Left
+tLabel.Font, tLabel.TextSize, tLabel.TextColor3 = Enum.Font.GothamBold, 18, ACCENT_COLOR
+tLabel.Text = "Neo Soccer • Hitbox GUI"
+-- kapat
+local closeBtn = Instance.new("TextButton", titleBar)
+closeBtn.Size, closeBtn.Position = UDim2.fromOffset(24,24), UDim2.fromScale(1,0)+UDim2.fromOffset(-32,3)
+closeBtn.Text, closeBtn.Font, closeBtn.TextSize = "×", Enum.Font.GothamBlack, 22
+closeBtn.BackgroundTransparency, closeBtn.TextColor3 = 1, Color3.new(1,1,1)
+closeBtn.MouseButton1Click:Connect(function() window.Visible = not window.Visible end)
+
+-- sürükle
+local drag, startPos, dragSt
+titleBar.InputBegan:Connect(function(i) if i.UserInputType==Enum.UserInputType.MouseButton1 then drag=true; dragSt=i.Position; startPos=window.Position end end)
+titleBar.InputChanged:Connect(function(i)
+    if drag and i.UserInputType==Enum.UserInputType.MouseMovement then
+        window.Position = UDim2.fromOffset(startPos.X.Offset+(i.Position-dragSt).X, startPos.Y.Offset+(i.Position-dragSt).Y)
+    end
+end)
+titleBar.InputEnded:Connect(function(i) if i.UserInputType==Enum.UserInputType.MouseButton1 then drag=false end end)
+
+--++ Yan Sekme Çubuğu +++++++++++++++++++++++++
+local side = Instance.new("Frame", window)
+side.Size = UDim2.new(0, 90, 1, -30)
+side.Position = UDim2.fromOffset(0,30)
+side.BackgroundColor3 = Color3.fromRGB(20,20,20)
+Instance.new("UICorner", side).CornerRadius = UDim.new(0,8)
+-- sekme düzeni
+local tabList = Instance.new("UIListLayout", side)
+tabList.Padding, tabList.FillDirection = UDim.new(0,4), Enum.FillDirection.Vertical
+tabList.HorizontalAlignment = Enum.HorizontalAlignment.Center
+tabList.SortOrder = Enum.SortOrder.LayoutOrder
+tabList.VerticalAlignment = Enum.VerticalAlignment.Top
+tabList.Padding = UDim.new(0,6)
+
+local pages = {}  -- container’lar
+local currentPage
+
+local function makeTab(name, icon, order)
+    local btn = Instance.new("TextButton", side)
+    btn.LayoutOrder, btn.Size = order, UDim2.fromOffset(70,30)
+    btn.Text = icon.."  "..name
+    btn.Font, btn.TextSize = Enum.Font.GothamMedium, 15
+    btn.TextColor3, btn.BackgroundColor3 = Color3.new(1,1,1), Color3.fromRGB(35,35,35)
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0,6)
+    -- page container
+    local page = Instance.new("Frame", window)
+    page.Visible = false
+    page.Size, page.Position = UDim2.new(1,-100,1,-40), UDim2.fromOffset(100,40)
+    page.BackgroundTransparency = 1
+    pages[name] = page
+    -- tab click
+    btn.MouseButton1Click:Connect(function()
+        if currentPage then currentPage.Visible=false end
+        currentPage = page; page.Visible=true
+        for _,b in ipairs(side:GetChildren()) do if b:IsA("TextButton") then b.BackgroundColor3=Color3.fromRGB(35,35,35) end end
+        btn.BackgroundColor3 = ACCENT_COLOR
+    end)
+    return page
 end
 
-local function buildRing(hrp)
-	clearRing(hrp)
-	if not ringEnabled then return end
-	local yOff   = -hrp.Size.Y/2 + BAR_H/2 + 0.05
-	local step   = math.pi * 2 / SEGMENTS
-	local chord  = 2 * currentRange * math.sin(step/2)
-	for i = 0, SEGMENTS-1 do
-		local theta = i * step + step/2
-		local pos   = Vector3.new(math.cos(theta)*currentRange, yOff, math.sin(theta)*currentRange)
-		local seg   = Instance.new("Part")
-		seg.Name         = "KickSeg"
-		seg.Size         = Vector3.new(chord, BAR_H, BAR_W)
-		seg.Color        = ringColor
-		seg.Transparency = 0.35
-		seg.Material     = Enum.Material.Neon
-		seg.Anchored     = false
-		seg.CanCollide   = false
-		seg.Massless     = true
-		seg.CFrame       = hrp.CFrame * CFrame.new(pos) * CFrame.Angles(0, -theta, 0)
-		seg.Parent       = hrp
-		local weld = Instance.new("WeldConstraint", seg)
-		weld.Part0, weld.Part1 = hrp, seg
-	end
+local generalPage = makeTab("General","⚙",1)
+local colorPage   = makeTab("Colors","🎨",2)
+local audioPage   = makeTab("Audio","🔊",3)
+-- varsayılan aç
+task.defer(function() side:GetChildren()[1]:FindFirstChildOfClass("TextButton"):Activate() end)
+
+--++ Genel Sekme Elemanları -------------------------------
+local function gButton(txt, parent)
+    local b = mkButton(txt); b.Parent = parent; return b
+end
+local function gInput(def,parent)
+    local i = mkInput(def); i.Parent = parent; return i
+end
+local genList = Instance.new("UIListLayout", generalPage)
+genList.Padding = UDim.new(0,4); genList.HorizontalAlignment=Enum.HorizontalAlignment.Center
+
+local ringToggle = gButton("Ring: ON", generalPage)
+local rangeInput = gInput(tostring(currentRange), generalPage)
+local applyBtn   = gButton("Apply", generalPage)
+
+--++ Color Sekme  ----------------------------------------
+local colList = Instance.new("UIGridLayout", colorPage)
+colList.CellPadding, colList.CellSize = UDim2.fromOffset(6,6), UDim2.fromOffset(60,28)
+
+for _,opt in ipairs(colorOptions) do
+    local c = mkButton(opt[1],24); c.BackgroundColor3 = opt[2]; c.Parent = colorPage
+    c.MouseButton1Click:Connect(function()
+        ringColor = opt[2]; local hrp=lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+        if hrp then buildRing(hrp) end
+    end)
+end
+
+--++ Audio Sekme -----------------------------------------
+local audToggle = mkButton("Sound: ON", audioPage); audToggle.Parent = audioPage
+
+--============================================================
+-- 2) Halka, Ses, Etiket İşlevleri
+--============================================================
+local function clearRing(hrp) for _,c in ipairs(hrp:GetChildren()) do if c.Name=="KickSeg" then c:Destroy() end end end
+
+function buildRing(hrp)
+    clearRing(hrp); if not ringEnabled then return end
+    local y = -hrp.Size.Y/2 + BAR_H/2 + 0.05
+    local step, chord = (2*math.pi)/SEGMENTS, 2*currentRange*math.sin(math.pi/SEGMENTS)
+    for i=0, SEGMENTS-1 do
+        local th = i*step + step/2
+        local seg = Instance.new("Part")
+        seg.Name, seg.Size = "KickSeg", Vector3.new(chord,BAR_H,BAR_W)
+        seg.Color, seg.Transparency, seg.Material = ringColor, 0.25, Enum.Material.Neon
+        seg.Anchored, seg.CanCollide, seg.Massless = false,false,true
+        seg.CFrame = hrp.CFrame * CFrame.new(math.cos(th)*currentRange,y,math.sin(th)*currentRange) * CFrame.Angles(0,-th,0)
+        seg.Parent = hrp
+        Instance.new("WeldConstraint", seg).Part0, seg.Part1
+    end
 end
 
 local function getSound(hrp)
-	local s = hrp:FindFirstChild("KickSound") or Instance.new("Sound", hrp)
-	s.Name, s.SoundId, s.Volume = "KickSound", SOUND_ID, 1
-	return s
+    local s = hrp:FindFirstChild("KickSnd") or Instance.new("Sound", hrp)
+    s.Name, s.SoundId, s.Volume = "KickSnd", SOUND_ID, 1; return s
 end
 
 local function getLabel(ball)
-	local gui = ball:FindFirstChild("ReachGui") or Instance.new("BillboardGui", ball)
-	gui.Name          = "ReachGui"
-	gui.AlwaysOnTop   = true
-	gui.Size          = UDim2.new(0,120,0,40)
-	gui.StudsOffset   = Vector3.new(0, ball.Size.Y/2 + 1.5, 0)
-	local txt = gui:FindFirstChild("Txt") or Instance.new("TextLabel", gui)
-	txt.Name                  = "Txt"
-	txt.Size                  = UDim2.new(1,0,1,0)
-	txt.BackgroundTransparency= 1
-	txt.Font                  = Enum.Font.SourceSansBold
-	txt.TextScaled            = true
-	return txt
+    local gui = ball:FindFirstChild("ReachGui") or Instance.new("BillboardGui", ball)
+    gui.Name, gui.Size, gui.AlwaysOnTop, gui.StudsOffset = "ReachGui", UDim2.fromOffset(130,34), true, Vector3.new(0,ball.Size.Y/2+1.8,0)
+    local lbl = gui:FindFirstChild("Lbl") or Instance.new("TextLabel", gui)
+    lbl.Name, lbl.Size, lbl.BackgroundTransparency = "Lbl", UDim2.fromScale(1,1), 1
+    lbl.Font, lbl.TextScaled, lbl.TextStrokeTransparency = Enum.Font.GothamBold, true, 0.7
+    return lbl
 end
 
 --============================================================
---  ▼ UI Construction
+-- 3) UI Olayları -------------------------------------------
 --============================================================
-local ui = Instance.new("ScreenGui", lp:WaitForChild("PlayerGui"))
-ui.Name = "HitboxSettingsUI"
-
-local panel = Instance.new("Frame", ui)
-panel.Size = UDim2.new(0, 240, 0, 300)
-panel.Position = UDim2.new(0,20,0,80)
-panel.BackgroundColor3 = Color3.fromRGB(40,40,40)
-panel.BorderSizePixel  = 0
-panel.ClipsDescendants = true
-
-local corner = Instance.new("UICorner", panel)
-corner.CornerRadius = UDim.new(0,8)
-local stroke = Instance.new("UIStroke", panel)
-stroke.Thickness = 2
-stroke.Color = Color3.fromRGB(60,60,60)
-
-local title = Instance.new("TextLabel", panel)
-title.Size = UDim2.new(1,0,0,36)
-title.Position = UDim2.new(0,0,0,8)
-title.BackgroundTransparency = 1
-title.Text = "⚙️ Hitbox Ayarları"
-title.Font = Enum.Font.GothamBold
-title.TextSize = 22
-title.TextColor3 = Color3.new(1,1,1)
-title.TextXAlignment = Enum.TextXAlignment.Center
-
-local layout = Instance.new("UIListLayout", panel)
-layout.Padding = UDim.new(0,10)
-layout.SortOrder = Enum.SortOrder.LayoutOrder
-layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-layout.VerticalAlignment = Enum.VerticalAlignment.Top
-
--- Toggle Ring Button
-local toggleBtn = Instance.new("TextButton", panel)
-toggleBtn.Size = UDim2.new(0,200,0,32)
-toggleBtn.LayoutOrder = 2
-toggleBtn.Text = "Halka: Açık"
-toggleBtn.Font = Enum.Font.Gotham
-toggleBtn.TextSize = 18
-toggleBtn.TextColor3 = Color3.new(1,1,1)
-toggleBtn.BackgroundColor3 = Color3.fromRGB(70,70,70)
-local tCorner = Instance.new("UICorner", toggleBtn)
-tCorner.CornerRadius = UDim.new(0,6)
-
--- Range Input
-local rangeBox = Instance.new("TextBox", panel)
-rangeBox.Size = UDim2.new(0,200,0,30)
-rangeBox.LayoutOrder = 3
-rangeBox.PlaceholderText = "Yarıçap (stud)"
-rangeBox.Text = tostring(currentRange)
-rangeBox.Font = Enum.Font.Gotham
-rangeBox.TextSize = 18
-rangeBox.TextColor3 = Color3.new(1,1,1)
-rangeBox.BackgroundColor3 = Color3.fromRGB(70,70,70)
-local rCorner = Instance.new("UICorner", rangeBox)
-rCorner.CornerRadius = UDim.new(0,6)
-
-local applyBtn = Instance.new("TextButton", panel)
-applyBtn.Size = UDim2.new(0,200,0,28)
-applyBtn.LayoutOrder = 4
-applyBtn.Text = "Uygula"
-applyBtn.Font = Enum.Font.Gotham
-applyBtn.TextSize = 18
-applyBtn.TextColor3 = Color3.new(1,1,1)
-applyBtn.BackgroundColor3 = Color3.fromRGB(80,80,80)
-local aCorner = Instance.new("UICorner", applyBtn)
-aCorner.CornerRadius = UDim.new(0,6)
-
--- Color Picker
-local colorLabel = Instance.new("TextLabel", panel)
-colorLabel.Size = UDim2.new(1,-20,0,24)
-colorLabel.LayoutOrder = 5
-colorLabel.BackgroundTransparency = 1
-colorLabel.Text = "Renk:"
-colorLabel.Font = Enum.Font.Gotham
-colorLabel.TextSize = 18
-colorLabel.TextColor3 = Color3.new(1,1,1)
-colorLabel.TextXAlignment = Enum.TextXAlignment.Left
-
-local colorFrame = Instance.new("Frame", panel)
-colorFrame.Size = UDim2.new(0,200,0,40)
-colorFrame.LayoutOrder = 6
-colorFrame.BackgroundTransparency = 1
-local grid = Instance.new("UIGridLayout", colorFrame)
-grid.CellSize = UDim2.new(0,48,0,32)
-grid.CellPadding = UDim2.new(0,8,0,8)
-grid.FillDirection = Enum.FillDirection.Horizontal
-
-local colors = {
-	{ name="Mavi",   col=Color3.fromRGB(0,128,255) },
-	{ name="Yeşil",  col=Color3.fromRGB(0,255,0) },
-	{ name="Kırmızı",col=Color3.fromRGB(255,0,0) },
-}
-for _,info in ipairs(colors) do
-	local btn = Instance.new("TextButton", colorFrame)
-	btn.Name = info.name
-	btn.Size = UDim2.new(0,48,0,32)
-	btn.BackgroundColor3 = info.col
-	btn.Text = ""
-	local cCorner = Instance.new("UICorner", btn)
-	cCorner.CornerRadius = UDim.new(0,6)
-	btn.MouseButton1Click:Connect(function()
-		ringColor = info.col
-		local hrp = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
-		if hrp then buildRing(hrp) end
-	end)
-end
-
--- Sound Toggle
-local soundBtn = Instance.new("TextButton", panel)
-soundBtn.Size = UDim2.new(0,200,0,32)
-soundBtn.LayoutOrder = 7
-soundBtn.Text = "Ses: Açık"
-soundBtn.Font = Enum.Font.Gotham
-soundBtn.TextSize = 18
-soundBtn.TextColor3 = Color3.new(1,1,1)
-soundBtn.BackgroundColor3 = Color3.fromRGB(70,70,70)
-local sCorner = Instance.new("UICorner", soundBtn)
-sCorner.CornerRadius = UDim.new(0,6)
-
--- Reset Button
-local resetBtn = Instance.new("TextButton", panel)
-resetBtn.Size = UDim2.new(0,200,0,32)
-resetBtn.LayoutOrder = 8
-resetBtn.Text = "Sıfırla"
-resetBtn.Font = Enum.Font.Gotham
-resetBtn.TextSize = 18
-resetBtn.TextColor3 = Color3.new(1,1,1)
-resetBtn.BackgroundColor3 = Color3.fromRGB(70,70,70)
-local rsCorner = Instance.new("UICorner", resetBtn)
-rsCorner.CornerRadius = UDim.new(0,6)
-
---============================================================
---  ▼ UI Events
---============================================================
-toggleBtn.MouseButton1Click:Connect(function()
-	ringEnabled = not ringEnabled
-	toggleBtn.Text = "Halka: "..(ringEnabled and "Açık" or "Kapalı")
-	local hrp = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
-	if hrp then
-		if ringEnabled then buildRing(hrp) else clearRing(hrp) end
-	end
+ringToggle.MouseButton1Click:Connect(function()
+    ringEnabled = not ringEnabled
+    ringToggle.Text = "Ring: "..(ringEnabled and "ON" or "OFF")
+    local hrp=lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+    if hrp then (ringEnabled and buildRing or clearRing)(hrp) end
 end)
 
 applyBtn.MouseButton1Click:Connect(function()
-	local v = tonumber(rangeBox.Text)
-	if v and v>0 then
-		currentRange = v
-		local hrp = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
-		if hrp then buildRing(hrp) end
-	end
+    local v = tonumber(rangeInput.Text); if v and v>0 then currentRange=v end
+    local hrp=lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+    if hrp then buildRing(hrp) end
 end)
 
-soundBtn.MouseButton1Click:Connect(function()
-	soundEnabled = not soundEnabled
-	soundBtn.Text = "Ses: "..(soundEnabled and "Açık" or "Kapalı")
+audToggle.MouseButton1Click:Connect(function()
+    soundEnabled = not soundEnabled
+    audToggle.Text = "Sound: "..(soundEnabled and "ON" or "OFF")
 end)
 
 resetBtn.MouseButton1Click:Connect(function()
-	ringEnabled, currentRange, ringColor, soundEnabled =
-		true, DEFAULT_RANGE, DEFAULT_RING_COLOR, true
-	toggleBtn.Text = "Halka: Açık"
-	soundBtn.Text  = "Ses: Açık"
-	rangeBox.Text  = tostring(currentRange)
-	local hrp = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
-	if hrp then buildRing(hrp) end
+    ringEnabled, currentRange, ringColor, soundEnabled =
+        true, DEFAULT_RANGE, DEFAULT_RING_COLOR, true
+    ringToggle.Text, audToggle.Text, rangeInput.Text = "Ring: ON","Sound: ON",tostring(currentRange)
+    local hrp=lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+    if hrp then buildRing(hrp) end
 end)
 
 --============================================================
---  ▼ Character & Ball Logic
+-- 4) Karakter & Top Takibi ----------------------------------
 --============================================================
-local function onCharacter(char)
-	local hrp = char:WaitForChild("HumanoidRootPart",3)
-	if not hrp then return end
-	buildRing(hrp)
-	local beep = getSound(hrp)
-	local prevInside = false
+local function onChar(char)
+    local hrp = char:WaitForChild("HumanoidRootPart")
+    buildRing(hrp)
+    local beep = getSound(hrp); local prev=false
+    task.spawn(function()
+        local ball repeat
+            ball = workspace:FindFirstChild(BALL_MODEL,true); ball = ball and ball:FindFirstChild(BALL_PART,true)
+            task.wait(0.2)
+        until ball and ball:IsA("BasePart")
+        local lbl = getLabel(ball)
 
-	task.spawn(function()
-		local ball
-		repeat
-			local m = workspace:FindFirstChild(BALL_MODEL, true)
-			ball = m and m:FindFirstChild(BALL_PART, true)
-			task.wait(0.2)
-		until ball and ball:IsA("BasePart")
-
-		local label = getLabel(ball)
-		label.Text = ""
-		label.TextColor3 = Color3.new(1,1,1)
-
-		RunService.Heartbeat:Connect(function()
-			local inside = (ball.Position - hrp.Position).Magnitude <= currentRange
-			if inside and not prevInside and soundEnabled then beep:Play() end
-			prevInside = inside
-
-			label.Text = inside and "Reachable" or "Unreachable!"
-			label.TextColor3 = inside and DEFAULT_IN_COLOR or Color3.new(1,0,0)
-		end)
-	end)
+        RunService.Heartbeat:Connect(function()
+            local inside = (ball.Position-hrp.Position).Magnitude<=currentRange
+            if inside and not prev and soundEnabled then beep:Play() end
+            prev = inside
+            lbl.Text, lbl.TextColor3 = inside and "Reachable" or "Unreachable!",
+                inside and Color3.new(0,1,0) or Color3.new(1,0,0)
+        end)
+    end)
 end
-
-if lp.Character then onCharacter(lp.Character) end
-lp.CharacterAdded:Connect(onCharacter)
+if lp.Character then onChar(lp.Character) end
+lp.CharacterAdded:Connect(onChar)
